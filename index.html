@@ -13,31 +13,31 @@
     }
     body {
       display: flex;
-      flex-direction: column;
+      justify-content: center;
       align-items: center;
       min-height: 100vh;
-      justify-content: center;
-    }
-    #title {
-      font-size: 32px;
-      font-weight: bold;
-      margin: 10px;
     }
     #gameContainer {
       display: flex;
       flex-direction: column;
       align-items: center;
     }
+    #infoPanel {
+      margin-bottom: 10px;
+      text-align: center;
+    }
     #winnerMessage {
       margin-top: 5px;
       font-weight: bold;
       color: #ff8080;
     }
-    canvas {
-      border: 1px solid #000;
+    button {
+      margin: 0 8px;
+      padding: 6px 12px;
+      cursor: pointer;
     }
     #rules {
-      margin-top: 10px;
+      margin: 10px 0;
       padding: 8px 12px;
       border: 1px solid #ccc;
       border-radius: 4px;
@@ -45,22 +45,30 @@
       text-align: center;
       background-color: #f9f9f9;
     }
+    canvas {
+      border: 1px solid #000;
+    }
   </style>
 </head>
 <body>
 
-<div id="title">Tic Tac Toe</div>
-
 <div id="gameContainer">
-  <canvas id="gameCanvas" width="600" height="600"></canvas>
-  <div id="winnerMessage"></div>
-</div>
+  <div id="infoPanel">
+    <button onclick="startGame('twoPlayer')">2-Player Mode</button>
+    <button onclick="startGame('singlePlayer')">1-Player Mode</button>
+    <div id="winnerMessage"></div>
+  </div>
 
-<div id="rules">
-  <strong>Rules:</strong><br>
-  1) The board is 5×5, and you need 4 in a row to win.<br>
-  2) We randomly place a few X’s and O’s before each game starts.<br>
-  3) X always moves first. Good luck!
+  <div id="rules">
+    <strong>Rules:</strong><br>
+    1) The board is <em>5×5</em>, and you need <em>4 in a row</em> to win.<br>
+    2) We randomly place a few X’s and O’s before each game starts.<br>
+    3) X always moves first (whether single- or two-player).<br>
+    4) This AI uses iterative deepening + transposition caching.<br>
+    Good luck!
+  </div>
+
+  <canvas id="gameCanvas" width="600" height="600"></canvas>
 </div>
 
 <script>
@@ -69,7 +77,9 @@
  ***************************************************************/
 let canvas, ctx;
 let board;                // 2D array [5][5], each cell: 'X', 'O', or null
-let gameActive;          // boolean
+let currentPlayer;        // 'X' or 'O'
+let gameActive;           // boolean
+let singlePlayer;         // boolean => if true, AI is 'O'
 let cellSize;
 let winnerMessageEl;
 let winningLine = null;
@@ -77,17 +87,16 @@ let winner = null;
 
 const SIZE = 5;
 const EMPTY = null;
-const NEEDED = 4;   // 4 in a row needed
+
+// 4 in a row needed to win
+const NEEDED = 4;
 
 // We'll allow iterative deepening up to a "max" depth
-const MAX_DEPTH = 12;
-const TIME_LIMIT_MS = 2000;
+const MAX_DEPTH = 12;   // you can tweak
+const TIME_LIMIT_MS = 2000; // 2 seconds time limit
 
 // Transposition caching
 let transpoMap = new Map();
-
-// We define the current players as: user='X', AI='O'
-let currentPlayer = 'X';
 
 /***************************************************************
  * ON LOAD
@@ -99,38 +108,40 @@ window.onload = function() {
 
   cellSize = canvas.width / SIZE;
 
-  // Click
   canvas.addEventListener('mousedown', onCanvasClick);
 
-  // Start the single-player game
-  startGame();
+  // Start default in 2-player
+  startGame('twoPlayer');
 };
 
 /***************************************************************
- * START SINGLE-PLAYER GAME
+ * START GAME
+ * We'll do random board initialization to reduce advantage
  ***************************************************************/
-function startGame() {
+function startGame(mode) {
+  singlePlayer = (mode === 'singlePlayer');
+  // Create an empty 5x5 board
+  board = Array.from({ length: SIZE }, () => Array(SIZE).fill(EMPTY));
   gameActive = true;
   winner = null;
   winningLine = null;
   transpoMap.clear();
 
-  // Create empty 5x5 board
-  board = Array.from({ length: SIZE }, () => Array(SIZE).fill(EMPTY));
-
-  // Random initialization: e.g. 2 X and 2 O
+  // Randomly place a few X/O pieces (2 each, for example)
   randomBoardInitialization(1, 1);
 
-  // X (user) moves first
+  // X always moves first
   currentPlayer = 'X';
 
   drawBoard();
 }
 
 /***************************************************************
- * RANDOM BOARD INIT
+ * RANDOM BOARD INITIALIZATION
+ * e.g. place 'countX' X's and 'countO' O's in random empty squares
  ***************************************************************/
 function randomBoardInitialization(countX, countO) {
+  // get all empty squares
   let empties = [];
   for (let r=0; r<SIZE; r++){
     for (let c=0; c<SIZE; c++){
@@ -143,11 +154,13 @@ function randomBoardInitialization(countX, countO) {
   let placedO = 0;
   let idx = 0;
 
+  // place X's
   while(placedX < countX && idx < empties.length){
     let {r,c} = empties[idx++];
     board[r][c] = 'X';
     placedX++;
   }
+  // place O's
   while(placedO < countO && idx < empties.length){
     let {r,c} = empties[idx++];
     board[r][c] = 'O';
@@ -156,7 +169,7 @@ function randomBoardInitialization(countX, countO) {
 }
 
 /***************************************************************
- * UTILITY: Shuffle array in place
+ * Simple utility: shuffle an array in-place
  ***************************************************************/
 function shuffleArray(arr) {
   for (let i=arr.length-1; i>0; i--){
@@ -174,25 +187,29 @@ function drawBoard() {
   ctx.strokeStyle = '#000';
   ctx.lineWidth = 3;
 
-  // Lines
+  // Vertical lines
   for (let i = 1; i < SIZE; i++) {
-    // vertical
     ctx.beginPath();
     ctx.moveTo(i * cellSize, 0);
     ctx.lineTo(i * cellSize, canvas.height);
     ctx.stroke();
-    // horizontal
+  }
+  // Horizontal lines
+  for (let i = 1; i < SIZE; i++) {
     ctx.beginPath();
     ctx.moveTo(0, i * cellSize);
     ctx.lineTo(canvas.width, i * cellSize);
     ctx.stroke();
   }
 
-  // X / O
-  for (let r=0; r<SIZE; r++){
-    for (let c=0; c<SIZE; c++){
-      if (board[r][c] === 'X') drawX(r,c);
-      if (board[r][c] === 'O') drawO(r,c);
+  // X/O
+  for (let r = 0; r < SIZE; r++) {
+    for (let c = 0; c < SIZE; c++) {
+      if (board[r][c] === 'X') {
+        drawX(r, c);
+      } else if (board[r][c] === 'O') {
+        drawO(r, c);
+      }
     }
   }
 
@@ -242,10 +259,10 @@ function drawWinningLine(lineCoords) {
   const first = lineCoords[0];
   const last = lineCoords[lineCoords.length - 1];
 
-  const x1 = (first[1]+0.5) * cellSize;
-  const y1 = (first[0]+0.5) * cellSize;
-  const x2 = (last[1]+0.5) * cellSize;
-  const y2 = (last[0]+0.5) * cellSize;
+  const x1 = (first[1] + 0.5) * cellSize;
+  const y1 = (first[0] + 0.5) * cellSize;
+  const x2 = (last[1] + 0.5) * cellSize;
+  const y2 = (last[0] + 0.5) * cellSize;
 
   ctx.beginPath();
   ctx.moveTo(x1, y1);
@@ -265,24 +282,24 @@ function onCanvasClick(e) {
   const col = Math.floor(mx / cellSize);
   const row = Math.floor(my / cellSize);
 
-  if(row>=0 && row<SIZE && col>=0 && col<SIZE) {
-    if (board[row][col] === null) {
-      // user (X) move
-      board[row][col] = 'X';
-      checkGameState('X');
-      drawBoard();
+  if(row >= 0 && row < SIZE && col >= 0 && col < SIZE) {
+    if (board[row][col] === EMPTY) {
+      board[row][col] = currentPlayer;
+      checkGameState(currentPlayer);
 
       if(gameActive) {
-        // AI (O) move next
-        currentPlayer = 'O';
-        setTimeout(aiMoveIterativeDeepening, 200);
+        currentPlayer = (currentPlayer === 'X') ? 'O' : 'X';
+        if (singlePlayer && currentPlayer === 'O') {
+          setTimeout(aiMoveIterativeDeepening, 200);
+        }
       }
+      drawBoard();
     }
   }
 }
 
 /***************************************************************
- * AI MOVE - iterative deepening
+ * AI MOVE - ITERATIVE DEEPENING + TRANSPO
  ***************************************************************/
 function aiMoveIterativeDeepening() {
   if(!gameActive) return;
@@ -291,80 +308,93 @@ function aiMoveIterativeDeepening() {
   let bestMove = null;
   let bestScore = -Infinity;
 
-  for(let depth=1; depth<=MAX_DEPTH; depth++){
+  // We'll do iterative deepening from depth=1 up to MAX_DEPTH,
+  // or until we run out of TIME_LIMIT_MS
+  for(let depth=1; depth<=MAX_DEPTH; depth++) {
     let iterationBestMove = null;
     let iterationBestVal = -Infinity;
 
+    // All possible moves
     const emptyCells = getEmptyCells(board);
-    for(let move of emptyCells){
+
+    for(let move of emptyCells) {
       board[move.r][move.c] = 'O';
       let val = minimax(board, depth, -Infinity, Infinity, false, startTime);
-      board[move.r][move.c] = null;
+      board[move.r][move.c] = EMPTY;
 
-      if(val > iterationBestVal){
+      if (val > iterationBestVal) {
         iterationBestVal = val;
         iterationBestMove = move;
       }
     }
-    if(iterationBestVal > bestScore){
+
+    if(iterationBestVal > bestScore) {
       bestScore = iterationBestVal;
       bestMove = iterationBestMove;
     }
-    if((performance.now()-startTime) > TIME_LIMIT_MS){
+
+    let now = performance.now();
+    if((now - startTime) > TIME_LIMIT_MS) {
       break;
     }
   }
 
-  if(bestMove){
+  if(bestMove) {
     board[bestMove.r][bestMove.c] = 'O';
     checkGameState('O');
+    if(gameActive) currentPlayer = 'X';
     drawBoard();
   }
-  // next is user (X)
 }
 
 /***************************************************************
- * MINIMAX with alpha-beta
- * isMax = true => O's turn, isMax=false => X's turn
+ * MINIMAX with ALPHA-BETA + TIME CHECK + TRANSPO
+ * isMax=true => O's turn, isMax=false => X's turn
  ***************************************************************/
-function minimax(st, depth, alpha, beta, isMax, startTime){
-  // time check
-  if((performance.now()-startTime) > TIME_LIMIT_MS){
+function minimax(st, depth, alpha, beta, isMax, startTime) {
+  // Time check
+  if((performance.now() - startTime) > TIME_LIMIT_MS) {
+    // fallback => heuristic
     return heuristicEval(st);
   }
-  let terminalVal = checkTerminalAndScore(st, depth);
-  if(terminalVal !== null) return terminalVal;
 
-  let key = boardToString(st)+'|'+depth+'|'+isMax;
-  if(transpoMap.has(key)){
+  // Check terminal or depth=0
+  let terminalVal = checkTerminalAndScore(st, depth);
+  if(terminalVal !== null) {
+    return terminalVal;
+  }
+
+  // Transposition check
+  let key = boardToString(st) + '|' + depth + '|' + isMax;
+  if(transpoMap.has(key)) {
     return transpoMap.get(key);
   }
 
-  if(isMax){
+  if(isMax) {
     let bestVal = -Infinity;
     let moves = getEmptyCells(st);
-    for(let mv of moves){
+    for (let mv of moves) {
       st[mv.r][mv.c] = 'O';
       let val = minimax(st, depth-1, alpha, beta, false, startTime);
-      st[mv.r][mv.c] = null;
+      st[mv.r][mv.c] = EMPTY;
 
       bestVal = Math.max(bestVal, val);
       alpha = Math.max(alpha, bestVal);
-      if(alpha>=beta) break;
+      if(alpha >= beta) break; // prune
     }
     transpoMap.set(key, bestVal);
     return bestVal;
   } else {
     let bestVal = Infinity;
     let moves = getEmptyCells(st);
-    for(let mv of moves){
+    for(let mv of moves) {
       st[mv.r][mv.c] = 'X';
       let val = minimax(st, depth-1, alpha, beta, true, startTime);
-      st[mv.r][mv.c] = null;
+      st[mv.r][mv.c] = EMPTY;
 
       bestVal = Math.min(bestVal, val);
       beta = Math.min(beta, bestVal);
-      if(alpha>=beta) break;
+      if(alpha >= beta) break; // prune
     }
     transpoMap.set(key, bestVal);
     return bestVal;
@@ -376,40 +406,39 @@ function minimax(st, depth, alpha, beta, isMax, startTime){
  * If O wins => +1000 + depth
  * If X wins => -1000 - depth
  ***************************************************************/
-function checkTerminalAndScore(st, depth){
+function checkTerminalAndScore(st, depth) {
   let res = getWinnerOrDraw(st);
-  if(res==='O') return 1000+depth;
-  if(res==='X') return -1000-depth;
-  if(res==='draw') return 0;
+  if (res==='O') return 1000 + depth;  
+  if (res==='X') return -1000 - depth; 
+  if (res==='draw') return 0;
 
-  if(depth===0){
+  if(depth===0) {
+    // Evaluate partial
     return heuristicEval(st);
   }
-  return null;
+  return null; // not terminal
 }
 
 /***************************************************************
- * Heuristic (4 in a row on 5x5)
+ * Heuristic
+ * Similar logic, but for 4 in a row on 5x5
  ***************************************************************/
-function heuristicEval(st){
-  let score=0;
-  let lines = generateWinLines();
-  for(let line of lines){
+function heuristicEval(st) {
+  let score = 0;
+  let lines = generateWinLines(); // lines for 4 in a row
+
+  for(let line of lines) {
     let xCount=0, oCount=0;
-    for(let [r,c] of line){
+    for(let [r,c] of line) {
       if(st[r][c]==='X') xCount++;
       if(st[r][c]==='O') oCount++;
     }
-    // if no X => reward O
-    if(xCount===0){
-      if(oCount===3) score+=10; 
-      if(oCount===2) score+=3;
-    }
-    // if no O => penalize X
-    if(oCount===0){
-      if(xCount===3) score-=10; 
-      if(xCount===2) score-=3;
-    }
+    // If no X, reward O
+    if(oCount===3 && xCount===0) score += 10; // 3 of O in a line of 4 => strong
+    if(oCount===2 && xCount===0) score += 3; 
+    // If no O, penalize X
+    if(xCount===3 && oCount===0) score -= 10;
+    if(xCount===2 && oCount===0) score -= 3;
   }
   return score;
 }
@@ -417,7 +446,7 @@ function heuristicEval(st){
 /***************************************************************
  * GET WINNER OR DRAW
  ***************************************************************/
-function getWinnerOrDraw(st){
+function getWinnerOrDraw(st) {
   if(isWinnerState(st,'O')) return 'O';
   if(isWinnerState(st,'X')) return 'X';
   if(boardFull(st)) return 'draw';
@@ -427,10 +456,12 @@ function getWinnerOrDraw(st){
 /***************************************************************
  * isWinnerState
  ***************************************************************/
-function isWinnerState(st, player){
+function isWinnerState(st, player) {
   let lines = generateWinLines();
-  for(let ln of lines){
-    if(ln.every(([r,c]) => st[r][c]===player)) return true;
+  for(let ln of lines) {
+    if(ln.every(([r,c])=>st[r][c]===player)) {
+      return true;
+    }
   }
   return false;
 }
@@ -438,10 +469,10 @@ function isWinnerState(st, player){
 /***************************************************************
  * boardFull
  ***************************************************************/
-function boardFull(st){
+function boardFull(st) {
   for(let r=0; r<SIZE; r++){
     for(let c=0; c<SIZE; c++){
-      if(st[r][c]===null) return false;
+      if(st[r][c]===EMPTY) return false;
     }
   }
   return true;
@@ -450,10 +481,10 @@ function boardFull(st){
 /***************************************************************
  * getWinningLine
  ***************************************************************/
-function getWinningLine(player){
+function getWinningLine(player) {
   let lines = generateWinLines();
-  for(let ln of lines){
-    if(ln.every(([r,c])=>board[r][c]===player)){
+  for(let ln of lines) {
+    if(ln.every(([r,c])=>board[r][c]===player)) {
       return ln;
     }
   }
@@ -463,40 +494,41 @@ function getWinningLine(player){
 /***************************************************************
  * getEmptyCells
  ***************************************************************/
-function getEmptyCells(st){
-  let arr=[];
+function getEmptyCells(st) {
+  let arr = [];
   for(let r=0; r<SIZE; r++){
     for(let c=0; c<SIZE; c++){
-      if(st[r][c]===null) arr.push({r,c});
+      if(st[r][c]===EMPTY) arr.push({r,c});
     }
   }
   return arr;
 }
 
 /***************************************************************
- * generateWinLines (4 in a row on 5x5)
+ * generateWinLines
+ * Generate all lines of length 4 in a 5x5 board
  ***************************************************************/
-function generateWinLines(){
-  let lines=[];
-  // horizontal
+function generateWinLines() {
+  const lines = [];
+  // Horizontal lines of length 4
   for(let r=0; r<SIZE; r++){
     for(let c=0; c<=SIZE-4; c++){
       lines.push([[r,c],[r,c+1],[r,c+2],[r,c+3]]);
     }
   }
-  // vertical
+  // Vertical lines of length 4
   for(let c=0; c<SIZE; c++){
     for(let r=0; r<=SIZE-4; r++){
       lines.push([[r,c],[r+1,c],[r+2,c],[r+3,c]]);
     }
   }
-  // diag down-right
+  // Diagonal down-right
   for(let r=0; r<=SIZE-4; r++){
     for(let c=0; c<=SIZE-4; c++){
       lines.push([[r,c],[r+1,c+1],[r+2,c+2],[r+3,c+3]]);
     }
   }
-  // diag down-left
+  // Diagonal down-left
   for(let r=0; r<=SIZE-4; r++){
     for(let c=SIZE-1; c>=3; c--){
       lines.push([[r,c],[r+1,c-1],[r+2,c-2],[r+3,c-3]]);
@@ -508,28 +540,32 @@ function generateWinLines(){
 /***************************************************************
  * checkGameState
  ***************************************************************/
-function checkGameState(player){
-  if(isWinnerState(board,player)){
+function checkGameState(player) {
+  if(isWinnerState(board,player)) {
     winner=player;
     gameActive=false;
     winningLine=getWinningLine(player);
-    document.getElementById('winnerMessage').innerText = player+" wins!";
-  } else if(boardFull(board)){
+    if(winnerMessageEl) {
+      winnerMessageEl.innerText=player + " wins!";
+    }
+  } else if(boardFull(board)) {
     winner=null;
     gameActive=false;
-    document.getElementById('winnerMessage').innerText = "It's a draw!";
+    if(winnerMessageEl) {
+      winnerMessageEl.innerText="It's a draw!";
+    }
   }
 }
 
 /***************************************************************
  * boardToString for transposition
  ***************************************************************/
-function boardToString(st){
-  let s="";
+function boardToString(st) {
+  let s = "";
   for(let r=0; r<SIZE; r++){
     for(let c=0; c<SIZE; c++){
-      let val=st[r][c];
-      s+=(val===null)?'.':val;
+      let val = st[r][c];
+      s += (val===null) ? '.' : val;
     }
   }
   return s;
@@ -538,4 +574,6 @@ function boardToString(st){
 
 </body>
 </html>
+
+
 
